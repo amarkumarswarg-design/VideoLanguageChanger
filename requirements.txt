@@ -1,8 +1,8 @@
-pyrogram
-tgcrypto
-moviepy
-googletrans==4.0.0-rc1
-gTTS
-SpeechRecognition
-flask
-Werkzeug==2.2.2
+pyrogram>=2.0.0
+pytgcalls>=3.0.0  # if needed, but not used; can remove if you don't use voice chats
+Flask>=2.2.0
+moviepy>=1.0.3
+googletrans==4.0.0rc1
+gTTS>=2.3.0
+SpeechRecognition>=3.10.0
+pydub>=0.25.1  # optional, but moviepy may need it
