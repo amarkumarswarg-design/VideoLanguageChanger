@@ -1,55 +1,21 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Video Dubbing Bot for Telegram
-Supports 40+ languages, uses TgCrypto for speed, Flask for Render port binding.
-Author: DeepSeek
-"""
-
 import os
 import sys
 import asyncio
 import tempfile
 import shutil
-import time
 import logging
 import traceback
 from threading import Thread
 from datetime import datetime
-from typing import Dict, Optional, Any
 
 # -------------------- FIX EVENT LOOP FOR PYTHON 3.10+ --------------------
 try:
-    loop = asyncio.get_running_loop()
+    loop = asyncio.get_event_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-# -------------------- THIRD PARTY IMPORTS --------------------
-# (Ensure TgCrypto is installed for faster Pyrogram)
-try:
-    import tgcrypto  # noqa
-except ImportError:
-    print("TgCrypto not installed. Pyrogram will run slower. Install it for speed.")
-
-from flask import Flask
-import pyrogram
-from pyrogram import Client, filters, idle
-from pyrogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    CallbackQuery, Message
-)
-from pyrogram.enums import ParseMode
-from pyrogram.errors import FloodWait, RPCError
-
-import moviepy.editor as mp
-from moviepy.config import change_settings
-from googletrans import Translator
-from gtts import gTTS
-import speech_recognition as sr
-
-# -------------------- CONFIGURE LOGGING --------------------
+# -------------------- LOGGING --------------------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -57,18 +23,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# -------------------- FLASK SERVER FOR RENDER PORT --------------------
+# -------------------- FLASK FOR RENDER PORT --------------------
+from flask import Flask
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is Running! | Uptime: {}".format(datetime.utcnow().isoformat())
+    return "Bot is running! | Uptime: {}".format(datetime.utcnow().isoformat())
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, threaded=True)
 
-# -------------------- CONFIGURATION (ENVIRONMENT VARIABLES) --------------------
+# -------------------- ENVIRONMENT VARIABLES --------------------
 API_ID = int(os.environ.get("API_ID", 0))
 API_HASH = os.environ.get("API_HASH", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
@@ -77,9 +44,51 @@ if not API_ID or not API_HASH or not BOT_TOKEN:
     logger.error("Missing API_ID, API_HASH or BOT_TOKEN environment variables.")
     sys.exit(1)
 
-# -------------------- LANGUAGE SUPPORT (40+ LANGUAGES) --------------------
-# Format: ISO-639-1 code : Display name
-LANGS = {
+# -------------------- TGCRYPTO (SPEED) --------------------
+try:
+    import tgcrypto
+    logger.info("TgCrypto installed. Pyrogram will run fast.")
+except ImportError:
+    logger.warning("TgCrypto not installed. Pyrogram will run slower. Install it for speed.")
+
+# -------------------- PYROGRAM --------------------
+from pyrogram import Client, filters, idle
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
+from pyrogram.enums import ParseMode
+from pyrogram.errors import FloodWait, RPCError
+
+# -------------------- VIDEO PROCESSING --------------------
+# सही तरीके से moviepy इम्पोर्ट करें
+try:
+    import moviepy.editor as mp
+    # ffmpeg की उपलब्धता सुनिश्चित करें
+    import imageio_ffmpeg
+    mp.change_settings({"FFMPEG_BINARY": imageio_ffmpeg.get_ffmpeg_exe()})
+    logger.info("MoviePy imported successfully with ffmpeg.")
+except ImportError as e:
+    logger.error(f"MoviePy import failed: {e}")
+    logger.error("Please ensure moviepy and imageio-ffmpeg are installed.")
+    sys.exit(1)
+
+from googletrans import Translator
+from gtts import gTTS
+import speech_recognition as sr
+
+# -------------------- LANGUAGE DATA --------------------
+# 1. बॉट इंटरफ़ेस के लिए भाषाएँ (UI भाषा)
+UI_LANGS = {
+    "hi": "हिन्दी",
+    "en": "English",
+    "ru": "Русский",
+    "ar": "العربية",
+    "es": "Español",
+    "fr": "Français",
+    "de": "Deutsch",
+    "zh-cn": "中文"
+}
+
+# 2. डबिंग के लिए 40+ भाषाएँ (स्रोत और लक्ष्य)
+DUB_LANGS = {
     "af": "Afrikaans", "ar": "العربية (Arabic)", "bg": "Български (Bulgarian)",
     "bn": "বাংলা (Bengali)", "ca": "Català (Catalan)", "cs": "Čeština (Czech)",
     "da": "Dansk (Danish)", "de": "Deutsch (German)", "el": "Ελληνικά (Greek)",
@@ -99,58 +108,124 @@ LANGS = {
     "vi": "Tiếng Việt (Vietnamese)", "zh-cn": "中文 (Chinese Simplified)"
 }
 
-# Mapping for Google Speech Recognition (some languages need region codes)
+# Speech Recognition के लिए भाषा मैपिंग (कुछ भाषाओं को क्षेत्रीय कोड चाहिए)
 SR_LANG_MAP = {
     "en": "en-US", "hi": "hi-IN", "es": "es-ES", "fr": "fr-FR",
     "de": "de-DE", "ru": "ru-RU", "ar": "ar-SA", "bn": "bn-IN",
     "pt": "pt-PT", "ja": "ja-JP", "ko": "ko-KR", "zh-cn": "zh-CN",
-    # For others, fallback to ISO code
 }
 def get_sr_lang(code):
     return SR_LANG_MAP.get(code, code)
 
-# gTTS uses ISO 639-1 directly
+# gTTS के लिए सीधे ISO कोड
 def get_gtts_lang(code):
     return code
 
-# -------------------- INITIALIZE BOT AND TRANSLATOR --------------------
+# -------------------- BOT CLIENT --------------------
 bot = Client(
     "dubbing_bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
-    workers=10,  # Number of worker threads
-    sleep_threshold=10  # Sleep threshold for flood wait
+    workers=10,
+    sleep_threshold=10
 )
 translator = Translator()
 
-# -------------------- USER DATA STORAGE (IN-MEMORY) --------------------
-# Structure: user_id -> {
-#    'source_lang': str,
-#    'target_lang': str,
-#    'video_msg_id': int,
-#    'step': str ('source'|'target'|'processing'),
-#    'temp_dir': str (path),
-#    'start_time': float
+# -------------------- USER DATA STORAGE --------------------
+# user_id -> {
+#   'ui_lang': 'hi',  # बॉट इंटरफ़ेस की भाषा
+#   'source_lang': None,
+#   'target_lang': None,
+#   'video_msg_id': None,
+#   'step': 'ui_lang'|'source'|'target'|'processing',
+#   'temp_dir': None
 # }
-user_data: Dict[int, Dict[str, Any]] = {}
+user_data = {}
 
-# -------------------- HELPER: LANGUAGE KEYBOARD (WITH PAGINATION) --------------------
-def lang_keyboard(prefix: str, page: int = 0, items_per_page: int = 9):
-    """
-    Create an inline keyboard with languages, paginated.
-    prefix: 'src' or 'tgt'
-    page: current page number (0-indexed)
-    """
-    lang_list = list(LANGS.items())
+# -------------------- HELPER: GET LOCALIZED TEXT --------------------
+def get_text(ui_lang, key):
+    """key के अनुसार स्थानीय भाषा में टेक्स्ट लौटाएँ"""
+    texts = {
+        "hi": {
+            "welcome": "👋 नमस्ते! मैं वीडियो डबिंग बॉट हूँ।\nकृपया अपनी पसंदीदा भाषा चुनें:",
+            "choose_ui_lang": "🌐 कृपया बॉट की भाषा चुनें:",
+            "ui_lang_set": "✅ भाषा सेट हो गई: {}",
+            "send_video": "🎥 अब 20 से 50 सेकंड की वीडियो भेजें।",
+            "video_length_error": "⚠️ कृपया 20 से 50 सेकंड के बीच की वीडियो भेजें। आपकी वीडियो {} सेकंड की है।",
+            "choose_source": "🎤 वीडियो में कौन-सी भाषा बोली जा रही है? (स्रोत भाषा चुनें)",
+            "choose_target": "🌍 अब वीडियो को किस भाषा में डब करना है? (लक्ष्य भाषा चुनें)",
+            "processing_start": "⏳ प्रोसेसिंग शुरू...\nस्रोत: {}\nलक्ष्य: {}\nकृपया प्रतीक्षा करें (1-2 मिनट)।",
+            "step_download": "📥 चरण 1/7: वीडियो डाउनलोड हो रहा है...",
+            "step_audio": "🎵 चरण 2/7: ऑडियो निकाला जा रहा है...",
+            "step_stt": "🗣️ चरण 3/7: आवाज़ को टेक्स्ट में बदला जा रहा है...",
+            "step_translate": "🔄 चरण 4/7: टेक्स्ट का अनुवाद किया जा रहा है...",
+            "step_tts": "🔊 चरण 5/7: नई आवाज़ बनाई जा रही है...",
+            "step_merge": "🎬 चरण 6/7: वीडियो तैयार किया जा रहा है...",
+            "step_upload": "📤 चरण 7/7: वीडियो भेजा जा रहा है...",
+            "success": "✅ डबिंग पूरी!\n\nस्रोत: {}\nलक्ष्य: {}\n\nअनुवादित टेक्स्ट:\n{}",
+            "error_no_data": "❌ कोई डेटा नहीं मिला। /start से शुरू करें।",
+            "error_video_not_found": "❌ वीडियो नहीं मिला। कृपया फिर से भेजें।",
+            "error_stt_failed": "❌ आवाज़ साफ नहीं थी। कृपया बेहतर ऑडियो वाली वीडियो भेजें।",
+            "error_general": "❌ प्रोसेसिंग में त्रुटि: {}",
+        },
+        "en": {
+            "welcome": "👋 Hello! I am a video dubbing bot.\nPlease choose your preferred language:",
+            "choose_ui_lang": "🌐 Please choose bot language:",
+            "ui_lang_set": "✅ Language set to: {}",
+            "send_video": "🎥 Now send a video of 20-50 seconds.",
+            "video_length_error": "⚠️ Please send a video between 20-50 seconds. Your video is {} seconds.",
+            "choose_source": "🎤 What language is spoken in the video? (Source language)",
+            "choose_target": "🌍 Now choose the target language for dubbing:",
+            "processing_start": "⏳ Processing started...\nSource: {}\nTarget: {}\nPlease wait (1-2 minutes).",
+            "step_download": "📥 Step 1/7: Downloading video...",
+            "step_audio": "🎵 Step 2/7: Extracting audio...",
+            "step_stt": "🗣️ Step 3/7: Converting speech to text...",
+            "step_translate": "🔄 Step 4/7: Translating text...",
+            "step_tts": "🔊 Step 5/7: Generating new audio...",
+            "step_merge": "🎬 Step 6/7: Merging audio with video...",
+            "step_upload": "📤 Step 7/7: Uploading video...",
+            "success": "✅ Dubbing complete!\n\nSource: {}\nTarget: {}\n\nTranslated text:\n{}",
+            "error_no_data": "❌ No data found. Please /start again.",
+            "error_video_not_found": "❌ Video not found. Please send again.",
+            "error_stt_failed": "❌ Speech not clear. Please send a video with better audio.",
+            "error_general": "❌ Processing error: {}",
+        },
+        # आप चाहें तो और भाषाएँ जोड़ सकते हैं (ru, ar, etc.)
+    }
+    # अगर चुनी हुई भाषा उपलब्ध न हो तो अंग्रेज़ी इस्तेमाल करें
+    if ui_lang not in texts:
+        ui_lang = "en"
+    return texts[ui_lang].get(key, key)
+
+# -------------------- KEYBOARD BUILDERS --------------------
+def ui_lang_keyboard():
+    """बॉट इंटरफ़ेस भाषा चुनने के लिए कीबोर्ड"""
+    buttons = []
+    row = []
+    for i, (code, name) in enumerate(UI_LANGS.items(), 1):
+        row.append(InlineKeyboardButton(name, callback_data=f"ui:{code}"))
+        if i % 3 == 0:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return InlineKeyboardMarkup(buttons)
+
+def dub_lang_keyboard(prefix, ui_lang, page=0):
+    """डबिंग भाषा चुनने के लिए कीबोर्ड (40+ भाषाएँ)"""
+    items_per_page = 9
+    lang_list = list(DUB_LANGS.items())
     total_pages = (len(lang_list) + items_per_page - 1) // items_per_page
     start = page * items_per_page
     end = min(start + items_per_page, len(lang_list))
-    current_page_langs = lang_list[start:end]
+    current_page = lang_list[start:end]
 
     buttons = []
     row = []
-    for i, (code, name) in enumerate(current_page_langs):
+    for i, (code, name) in enumerate(current_page):
+        # नाम को UI भाषा में दिखाने के लिए यहाँ सिर्फ अंग्रेज़ी नाम ही रखा है
+        # आप चाहें तो हर भाषा का नाम UI भाषा में अनुवाद कर सकते हैं
         row.append(InlineKeyboardButton(name, callback_data=f"{prefix}:{code}"))
         if len(row) == 3:
             buttons.append(row)
@@ -158,209 +233,185 @@ def lang_keyboard(prefix: str, page: int = 0, items_per_page: int = 9):
     if row:
         buttons.append(row)
 
-    # Navigation row
+    # नेविगेशन बटन
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("◀️ पिछला", callback_data=f"{prefix}_page:{page-1}"))
+        nav_buttons.append(InlineKeyboardButton("◀️ " + ("पिछला" if ui_lang=="hi" else "Previous"), callback_data=f"{prefix}_page:{page-1}"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("अगला ▶️", callback_data=f"{prefix}_page:{page+1}"))
+        nav_buttons.append(InlineKeyboardButton(("अगला" if ui_lang=="hi" else "Next") + " ▶️", callback_data=f"{prefix}_page:{page+1}"))
     if nav_buttons:
         buttons.append(nav_buttons)
 
     return InlineKeyboardMarkup(buttons)
 
-# -------------------- HANDLER: /start --------------------
+# -------------------- HANDLERS --------------------
 @bot.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
-    await message.reply(
-        "👋 **नमस्ते! मैं वीडियो डबिंग बॉट हूँ।**\n\n"
-        "मैं आपकी वीडियो में आवाज़ बदलकर किसी भी 40+ भाषा में डब कर सकता हूँ।\n\n"
-        "**बस इतना करें:**\n"
-        "1. 20 से 50 सेकंड की वीडियो भेजें।\n"
-        "2. वीडियो की भाषा चुनें।\n"
-        "3. जिस भाषा में डब करना है, वह चुनें।\n"
-        "4. कुछ सेकंड प्रतीक्षा करें।\n\n"
-        "✨ **फास्ट प्रोसेसिंग के लिए TgCrypto इंस्टॉल है।**",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-# -------------------- HANDLER: VIDEO MESSAGES --------------------
-@bot.on_message(filters.video)
-async def video_handler(client: Client, message: Message):
     user_id = message.from_user.id
-    duration = message.video.duration
-
-    # Check video length
-    if duration < 20 or duration > 50:
-        await message.reply(
-            "⚠️ **कृपया 20 से 50 सेकंड के बीच की वीडियो भेजें।**\n"
-            f"आपकी वीडियो की लंबाई: {duration} सेकंड"
-        )
-        return
-
-    # Store basic info
-    user_data[user_id] = {
-        'step': 'source',
-        'video_msg_id': message.id,
-        'start_time': time.time()
-    }
-
-    # Ask for source language
+    # पहली बार, UI भाषा चुनने के लिए कहें
+    user_data[user_id] = {'step': 'ui_lang'}
     await message.reply(
-        "🎤 **वीडियो में कौन-सी भाषा बोली जा रही है?**\n"
-        "कृपया स्रोत भाषा चुनें:",
-        reply_markup=lang_keyboard("src", 0)
+        get_text("en", "welcome"),  # डिफ़ॉल्ट अंग्रेज़ी में स्वागत
+        reply_markup=ui_lang_keyboard()
     )
 
-# -------------------- HANDLER: CALLBACK QUERIES (LANGUAGE SELECTION) --------------------
 @bot.on_callback_query()
 async def callback_handler(client: Client, callback: CallbackQuery):
-    await callback.answer()  # Always answer to stop loading animation
+    await callback.answer()
     user_id = callback.from_user.id
     data = callback.data
 
-    # Pagination for source language
+    # UI भाषा चयन
+    if data.startswith("ui:"):
+        ui_lang = data.split(":", 1)[1]
+        if user_id not in user_data:
+            user_data[user_id] = {}
+        user_data[user_id]['ui_lang'] = ui_lang
+        user_data[user_id]['step'] = 'video_wait'
+        await callback.message.edit_text(
+            get_text(ui_lang, "send_video")
+        )
+        return
+
+    # बाकी सब काम के लिए UI भाषा चाहिए
+    if user_id not in user_data or 'ui_lang' not in user_data[user_id]:
+        await callback.message.edit_text("❌ Please /start again.")
+        return
+    ui_lang = user_data[user_id]['ui_lang']
+
+    # पेजिनेशन हैंडलिंग
     if data.startswith("src_page:"):
         page = int(data.split(":")[1])
         await callback.message.edit_text(
-            "🎤 **वीडियो में कौन-सी भाषा बोली जा रही है?**\n"
-            "कृपया स्रोत भाषा चुनें:",
-            reply_markup=lang_keyboard("src", page)
+            get_text(ui_lang, "choose_source"),
+            reply_markup=dub_lang_keyboard("src", ui_lang, page)
         )
         return
-
-    # Pagination for target language
     if data.startswith("tgt_page:"):
         page = int(data.split(":")[1])
         await callback.message.edit_text(
-            "🌍 **अब वीडियो को किस भाषा में डब करना है?**\n"
-            "लक्ष्य भाषा चुनें:",
-            reply_markup=lang_keyboard("tgt", page)
+            get_text(ui_lang, "choose_target"),
+            reply_markup=dub_lang_keyboard("tgt", ui_lang, page)
         )
         return
 
-    # Source language selected
+    # स्रोत भाषा चयन
     if data.startswith("src:"):
         lang_code = data.split(":", 1)[1]
-        if user_id not in user_data:
-            user_data[user_id] = {}
         user_data[user_id]['source_lang'] = lang_code
         user_data[user_id]['step'] = 'target'
-
         await callback.message.edit_text(
-            "🌍 **अब वीडियो को किस भाषा में डब करना है?**\n"
-            "लक्ष्य भाषा चुनें:",
-            reply_markup=lang_keyboard("tgt", 0)
+            get_text(ui_lang, "choose_target"),
+            reply_markup=dub_lang_keyboard("tgt", ui_lang, 0)
         )
         return
 
-    # Target language selected
+    # लक्ष्य भाषा चयन
     if data.startswith("tgt:"):
         lang_code = data.split(":", 1)[1]
-        if user_id not in user_data:
-            await callback.message.edit_text("❌ **कोई डेटा नहीं मिला।** /start से शुरू करें।")
-            return
-
         user_data[user_id]['target_lang'] = lang_code
         user_data[user_id]['step'] = 'processing'
 
-        # Send processing started message
         processing_msg = await callback.message.edit_text(
-            "⏳ **प्रोसेसिंग शुरू...**\n"
-            f"स्रोत: {LANGS[user_data[user_id]['source_lang']]}\n"
-            f"लक्ष्य: {LANGS[lang_code]}\n\n"
-            "यह प्रक्रिया 1-2 मिनट ले सकती है। कृपया धैर्य रखें..."
+            get_text(ui_lang, "processing_start").format(
+                DUB_LANGS[user_data[user_id]['source_lang']],
+                DUB_LANGS[lang_code]
+            )
         )
-
-        # Start processing in background
+        # प्रोसेसिंग शुरू करें
         asyncio.create_task(process_video(processing_msg, user_id))
 
-# -------------------- VIDEO PROCESSING FUNCTION --------------------
+@bot.on_message(filters.video)
+async def video_handler(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id not in user_data or 'ui_lang' not in user_data[user_id]:
+        await message.reply("❌ Please /start first.")
+        return
+    if user_data[user_id].get('step') != 'video_wait':
+        await message.reply("❌ Please /start first.")
+        return
+
+    ui_lang = user_data[user_id]['ui_lang']
+    duration = message.video.duration
+
+    if duration < 20 or duration > 50:
+        await message.reply(get_text(ui_lang, "video_length_error").format(duration))
+        return
+
+    user_data[user_id]['video_msg_id'] = message.id
+    user_data[user_id]['step'] = 'source'
+    await message.reply(
+        get_text(ui_lang, "choose_source"),
+        reply_markup=dub_lang_keyboard("src", ui_lang, 0)
+    )
+
+# -------------------- VIDEO PROCESSING --------------------
 async def process_video(msg: Message, user_id: int):
-    """
-    Core function: download video, extract audio, speech-to-text, translate, TTS, merge, upload.
-    """
     temp_dir = None
     try:
         data = user_data.get(user_id)
         if not data:
-            await msg.edit_text("❌ **उपयोगकर्ता डेटा नहीं मिला।** /start से पुनः प्रयास करें।")
+            await msg.edit_text(get_text("en", "error_no_data"))
             return
+        ui_lang = data['ui_lang']
+        source_lang = data['source_lang']
+        target_lang = data['target_lang']
+        video_msg_id = data['video_msg_id']
 
-        # Get original video message
-        video_msg = await msg.chat.get_messages(data['video_msg_id'])
+        # वीडियो मैसेज लाएँ
+        video_msg = await msg.chat.get_messages(video_msg_id)
         if not video_msg or not video_msg.video:
-            await msg.edit_text("❌ **वीडियो संदेश नहीं मिल सका।** कृपया वीडियो फिर से भेजें।")
+            await msg.edit_text(get_text(ui_lang, "error_video_not_found"))
             return
 
-        # Step 1: Download video
-        await msg.edit_text("📥 **चरण 1/7:** वीडियो डाउनलोड हो रहा है...")
+        # डाउनलोड
+        await msg.edit_text(get_text(ui_lang, "step_download"))
         temp_dir = tempfile.mkdtemp(prefix="dub_")
         video_path = os.path.join(temp_dir, "input_video.mp4")
         await video_msg.download(file_name=video_path)
-        logger.info(f"Video downloaded for user {user_id}: {video_path}")
+        logger.info(f"Video downloaded for user {user_id}")
 
-        # Step 2: Extract audio
-        await msg.edit_text("🎵 **चरण 2/7:** ऑडियो निकाला जा रहा है...")
+        # ऑडियो निकालें
+        await msg.edit_text(get_text(ui_lang, "step_audio"))
         audio_path = os.path.join(temp_dir, "audio.wav")
         video_clip = mp.VideoFileClip(video_path)
         video_clip.audio.write_audiofile(audio_path, logger=None, verbose=False)
         video_clip.close()
-        logger.info(f"Audio extracted: {audio_path}")
 
-        # Step 3: Speech to Text
-        await msg.edit_text("🗣️ **चरण 3/7:** आवाज़ को टेक्स्ट में बदला जा रहा है...")
+        # Speech to Text
+        await msg.edit_text(get_text(ui_lang, "step_stt"))
         recognizer = sr.Recognizer()
         with sr.AudioFile(audio_path) as source:
-            # Adjust for ambient noise
             recognizer.adjust_for_ambient_noise(source, duration=1)
             audio_data = recognizer.record(source)
-
         try:
-            source_lang = get_sr_lang(data['source_lang'])
-            text = recognizer.recognize_google(audio_data, language=source_lang, show_all=False)
-            logger.info(f"Recognized text ({source_lang}): {text[:100]}")
+            text = recognizer.recognize_google(audio_data, language=get_sr_lang(source_lang))
+            logger.info(f"Recognized text: {text[:100]}")
         except sr.UnknownValueError:
-            await msg.edit_text("❌ **आवाज़ साफ नहीं थी।** कृपया बेहतर ऑडियो गुणवत्ता वाली वीडियो भेजें।")
-            return
-        except sr.RequestError as e:
-            await msg.edit_text(f"❌ **Google Speech Recognition में त्रुटि:** {e}")
+            await msg.edit_text(get_text(ui_lang, "error_stt_failed"))
             return
         except Exception as e:
-            await msg.edit_text(f"❌ **अप्रत्याशित त्रुटि:** {e}")
+            await msg.edit_text(get_text(ui_lang, "error_general").format(str(e)))
             return
 
-        # Step 4: Translate text
-        await msg.edit_text("🔄 **चरण 4/7:** टेक्स्ट का अनुवाद किया जा रहा है...")
-        target_lang = data['target_lang']
-        try:
-            translated = translator.translate(text, dest=target_lang)
-            translated_text = translated.text
-            logger.info(f"Translated to {target_lang}: {translated_text[:100]}")
-        except Exception as e:
-            await msg.edit_text(f"❌ **अनुवाद में त्रुटि:** {e}")
-            return
+        # अनुवाद
+        await msg.edit_text(get_text(ui_lang, "step_translate"))
+        translated = translator.translate(text, dest=target_lang)
+        translated_text = translated.text
+        logger.info(f"Translated text: {translated_text[:100]}")
 
-        # Step 5: Text-to-Speech (TTS)
-        await msg.edit_text("🔊 **चरण 5/7:** नई आवाज़ बनाई जा रही है...")
-        tts_lang = get_gtts_lang(target_lang)
-        try:
-            tts = gTTS(translated_text, lang=tts_lang, slow=False)
-            tts_path = os.path.join(temp_dir, "tts.mp3")
-            tts.save(tts_path)
-            logger.info(f"TTS saved: {tts_path}")
-        except Exception as e:
-            await msg.edit_text(f"❌ **TTS निर्माण में त्रुटि:** {e}")
-            return
+        # TTS
+        await msg.edit_text(get_text(ui_lang, "step_tts"))
+        tts = gTTS(translated_text, lang=get_gtts_lang(target_lang), slow=False)
+        tts_path = os.path.join(temp_dir, "tts.mp3")
+        tts.save(tts_path)
 
-        # Step 6: Merge new audio with video
-        await msg.edit_text("🎬 **चरण 6/7:** वीडियो तैयार किया जा रहा है...")
+        # मर्ज
+        await msg.edit_text(get_text(ui_lang, "step_merge"))
         video_clip = mp.VideoFileClip(video_path)
         new_audio = mp.AudioFileClip(tts_path)
 
-        # Adjust audio duration to match video
         if new_audio.duration < video_clip.duration:
-            # Loop audio to fill
             n = int(video_clip.duration / new_audio.duration) + 1
             new_audio = mp.concatenate_audioclips([new_audio] * n)
         new_audio = new_audio.subclip(0, video_clip.duration)
@@ -378,78 +429,50 @@ async def process_video(msg: Message, user_id: int):
         )
         video_clip.close()
         new_audio.close()
-        logger.info(f"Final video created: {output_path}")
 
-        # Step 7: Upload video
-        await msg.edit_text("📤 **चरण 7/7:** वीडियो भेजा जा रहा है...")
-        caption = (
-            f"✅ **डबिंग पूरी!**\n\n"
-            f"**स्रोत भाषा:** {LANGS[data['source_lang']]}\n"
-            f"**लक्ष्य भाषा:** {LANGS[target_lang]}\n"
-            f"**अनुवादित टेक्स्ट:**\n`{translated_text[:200]}`" + ("..." if len(translated_text) > 200 else "")
+        # अपलोड
+        await msg.edit_text(get_text(ui_lang, "step_upload"))
+        caption = get_text(ui_lang, "success").format(
+            DUB_LANGS[source_lang],
+            DUB_LANGS[target_lang],
+            translated_text[:200] + ("..." if len(translated_text) > 200 else "")
         )
         await msg.reply_video(
             video=output_path,
             caption=caption,
-            parse_mode=ParseMode.MARKDOWN,
-            supports_streaming=True
+            parse_mode=ParseMode.MARKDOWN
         )
-
-        # Cleanup
-        await msg.delete()  # remove processing message
-        logger.info(f"Processing completed for user {user_id}")
+        await msg.delete()  # प्रोसेसिंग मैसेज हटाएँ
+        logger.info(f"Processing complete for user {user_id}")
 
     except FloodWait as e:
-        logger.warning(f"FloodWait: {e.value} seconds")
-        await msg.edit_text(f"⏳ **बहुत अधिक अनुरोध।** कृपया {e.value} सेकंड प्रतीक्षा करें।")
+        logger.warning(f"FloodWait: {e.value}")
+        await msg.edit_text(f"⏳ Too many requests. Please wait {e.value} seconds.")
     except RPCError as e:
-        logger.error(f"Telegram RPC error: {e}")
-        await msg.edit_text(f"❌ **Telegram API त्रुटि:** {e}")
+        logger.error(f"RPC error: {e}")
+        await msg.edit_text(f"❌ Telegram API error: {e}")
     except Exception as e:
-        logger.error(f"Unexpected error in process_video: {traceback.format_exc()}")
-        await msg.edit_text(f"❌ **प्रोसेसिंग में अप्रत्याशित त्रुटि:** {str(e)}")
+        logger.error(f"Unexpected error: {traceback.format_exc()}")
+        await msg.edit_text(get_text(ui_lang if 'ui_lang' in locals() else "en", "error_general").format(str(e)))
     finally:
-        # Clean up temporary directory
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
-        # Remove user data
         if user_id in user_data:
-            del user_data[user_id]
+            # step को वापस video_wait पर सेट करें ताकि अगली वीडियो भेज सके
+            if user_id in user_data:
+                user_data[user_id]['step'] = 'video_wait'
 
-# -------------------- HANDLER: UNSUPPORTED MESSAGES --------------------
-@bot.on_message(filters.command("help"))
-async def help_command(client: Client, message: Message):
-    await message.reply(
-        "**सहायता**\n\n"
-        "• 20-50 सेकंड की वीडियो भेजें।\n"
-        "• स्रोत और लक्ष्य भाषा चुनें।\n"
-        "• प्रोसेसिंग के बाद डब वीडियो मिलेगा।\n\n"
-        "**सभी 40+ भाषाएँ सपोर्टेड हैं।**"
-    )
-
-@bot.on_message(filters.audio | filters.document | filters.photo)
-async def unsupported_handler(client: Client, message: Message):
-    await message.reply("❌ **केवल वीडियो फ़ाइलें स्वीकार की जाती हैं।** कृपया 20-50 सेकंड की वीडियो भेजें।")
-
-@bot.on_message(filters.text & ~filters.command(["start", "help"]))
-async def text_handler(client: Client, message: Message):
-    await message.reply("कृपया वीडियो भेजें। /start देखें।")
-
-# -------------------- MAIN FUNCTION --------------------
+# -------------------- MAIN --------------------
 async def main():
-    # Start Flask in background thread
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info("Flask server started on port %s", os.environ.get("PORT", 8080))
+    # Flask चलाएँ
+    Thread(target=run_flask, daemon=True).start()
+    logger.info("Flask server started.")
 
-    # Start Pyrogram bot
+    # बॉट शुरू करें
     await bot.start()
-    logger.info("Bot started successfully! @%s", bot.me.username)
+    logger.info(f"Bot started: @{bot.me.username}")
 
-    # Keep bot running
     await idle()
-
-    # Stop bot
     await bot.stop()
     logger.info("Bot stopped.")
 
