@@ -1,5 +1,4 @@
 pyrogram>=2.0.0
-pytgcalls>=3.0.0  # if needed, but not used; can remove if you don't use voice chats
 Flask>=2.2.0
 moviepy>=1.0.3
 googletrans==4.0.0rc1
