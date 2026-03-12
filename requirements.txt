@@ -4,4 +4,3 @@ moviepy>=1.0.3
 googletrans==4.0.0rc1
 gTTS>=2.3.0
 SpeechRecognition>=3.10.0
-pydub>=0.25.1  # optional, but moviepy may need it
