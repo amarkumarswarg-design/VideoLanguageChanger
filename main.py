@@ -1,7 +1,7 @@
 import os
 import asyncio
 
-# 🔥 FIX: Pyrogram import से पहले एक इवेंट लूप बना कर सेट करो
+# 🔥 FIX: Pyrogram import से पहले इवेंट लूप बनाओ
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
