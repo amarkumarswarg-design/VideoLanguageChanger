@@ -4,3 +4,4 @@ moviepy>=1.0.3
 googletrans==4.0.0rc1
 gTTS>=2.3.0
 SpeechRecognition>=3.10.0
+imageio-ffmpeg>=0.4.0
