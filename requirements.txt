@@ -5,3 +5,4 @@ googletrans==4.0.0-rc1
 gTTS
 SpeechRecognition
 flask
+Werkzeug==2.2.2
