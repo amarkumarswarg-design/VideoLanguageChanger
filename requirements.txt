@@ -1,13 +1,13 @@
 # Core
 pyrogram>=2.0.0
-TgCrypto>=1.2.5      # For fast encryption (speed up Pyrogram)
+TgCrypto>=1.2.5
 
-# Web server for Render
+# Web server
 Flask>=2.2.0
 
-# Video/Audio processing
+# Video processing
 moviepy>=1.0.3
-imageio-ffmpeg>=0.4.0   # Brings ffmpeg binaries automatically
+imageio-ffmpeg>=0.4.0
 
 # Translation & TTS
 googletrans==4.0.0rc1
@@ -16,5 +16,5 @@ gTTS>=2.3.0
 # Speech recognition
 SpeechRecognition>=3.10.0
 
-# Utilities
-pydub>=0.25.1          # Optional, but can help with audio manipulation
+# Optional but helpful
+pydub>=0.25.1
