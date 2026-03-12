@@ -57,18 +57,14 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQ
 from pyrogram.enums import ParseMode
 from pyrogram.errors import FloodWait, RPCError
 
-# -------------------- VIDEO PROCESSING --------------------
-# सही तरीके से moviepy इम्पोर्ट करें
-try:
-    import moviepy.editor as mp
-    # ffmpeg की उपलब्धता सुनिश्चित करें
-    import imageio_ffmpeg
-    mp.change_settings({"FFMPEG_BINARY": imageio_ffmpeg.get_ffmpeg_exe()})
-    logger.info("MoviePy imported successfully with ffmpeg.")
-except ImportError as e:
-    logger.error(f"MoviePy import failed: {e}")
-    logger.error("Please ensure moviepy and imageio-ffmpeg are installed.")
-    sys.exit(1)
+# -------------------- MOVIEPY (सही तरीका - v1.0.3) --------------------
+# MoviePy 1.0.3 में editor module मौजूद है
+from moviepy.editor import VideoFileClip, AudioFileClip, concatenate_audioclips
+
+# ffmpeg की उपलब्धता सुनिश्चित करें
+import imageio_ffmpeg
+os.environ['FFMPEG_BINARY'] = imageio_ffmpeg.get_ffmpeg_exe()
+logger.info("MoviePy 1.0.3 imported successfully with ffmpeg.")
 
 from googletrans import Translator
 from gtts import gTTS
@@ -108,7 +104,7 @@ DUB_LANGS = {
     "vi": "Tiếng Việt (Vietnamese)", "zh-cn": "中文 (Chinese Simplified)"
 }
 
-# Speech Recognition के लिए भाषा मैपिंग (कुछ भाषाओं को क्षेत्रीय कोड चाहिए)
+# Speech Recognition के लिए भाषा मैपिंग
 SR_LANG_MAP = {
     "en": "en-US", "hi": "hi-IN", "es": "es-ES", "fr": "fr-FR",
     "de": "de-DE", "ru": "ru-RU", "ar": "ar-SA", "bn": "bn-IN",
@@ -133,19 +129,10 @@ bot = Client(
 translator = Translator()
 
 # -------------------- USER DATA STORAGE --------------------
-# user_id -> {
-#   'ui_lang': 'hi',  # बॉट इंटरफ़ेस की भाषा
-#   'source_lang': None,
-#   'target_lang': None,
-#   'video_msg_id': None,
-#   'step': 'ui_lang'|'source'|'target'|'processing',
-#   'temp_dir': None
-# }
 user_data = {}
 
 # -------------------- HELPER: GET LOCALIZED TEXT --------------------
 def get_text(ui_lang, key):
-    """key के अनुसार स्थानीय भाषा में टेक्स्ट लौटाएँ"""
     texts = {
         "hi": {
             "welcome": "👋 नमस्ते! मैं वीडियो डबिंग बॉट हूँ।\nकृपया अपनी पसंदीदा भाषा चुनें:",
@@ -191,16 +178,13 @@ def get_text(ui_lang, key):
             "error_stt_failed": "❌ Speech not clear. Please send a video with better audio.",
             "error_general": "❌ Processing error: {}",
         },
-        # आप चाहें तो और भाषाएँ जोड़ सकते हैं (ru, ar, etc.)
     }
-    # अगर चुनी हुई भाषा उपलब्ध न हो तो अंग्रेज़ी इस्तेमाल करें
     if ui_lang not in texts:
         ui_lang = "en"
     return texts[ui_lang].get(key, key)
 
 # -------------------- KEYBOARD BUILDERS --------------------
 def ui_lang_keyboard():
-    """बॉट इंटरफ़ेस भाषा चुनने के लिए कीबोर्ड"""
     buttons = []
     row = []
     for i, (code, name) in enumerate(UI_LANGS.items(), 1):
@@ -213,7 +197,6 @@ def ui_lang_keyboard():
     return InlineKeyboardMarkup(buttons)
 
 def dub_lang_keyboard(prefix, ui_lang, page=0):
-    """डबिंग भाषा चुनने के लिए कीबोर्ड (40+ भाषाएँ)"""
     items_per_page = 9
     lang_list = list(DUB_LANGS.items())
     total_pages = (len(lang_list) + items_per_page - 1) // items_per_page
@@ -224,8 +207,6 @@ def dub_lang_keyboard(prefix, ui_lang, page=0):
     buttons = []
     row = []
     for i, (code, name) in enumerate(current_page):
-        # नाम को UI भाषा में दिखाने के लिए यहाँ सिर्फ अंग्रेज़ी नाम ही रखा है
-        # आप चाहें तो हर भाषा का नाम UI भाषा में अनुवाद कर सकते हैं
         row.append(InlineKeyboardButton(name, callback_data=f"{prefix}:{code}"))
         if len(row) == 3:
             buttons.append(row)
@@ -233,7 +214,6 @@ def dub_lang_keyboard(prefix, ui_lang, page=0):
     if row:
         buttons.append(row)
 
-    # नेविगेशन बटन
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("◀️ " + ("पिछला" if ui_lang=="hi" else "Previous"), callback_data=f"{prefix}_page:{page-1}"))
@@ -248,10 +228,9 @@ def dub_lang_keyboard(prefix, ui_lang, page=0):
 @bot.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
     user_id = message.from_user.id
-    # पहली बार, UI भाषा चुनने के लिए कहें
     user_data[user_id] = {'step': 'ui_lang'}
     await message.reply(
-        get_text("en", "welcome"),  # डिफ़ॉल्ट अंग्रेज़ी में स्वागत
+        get_text("en", "welcome"),
         reply_markup=ui_lang_keyboard()
     )
 
@@ -261,7 +240,6 @@ async def callback_handler(client: Client, callback: CallbackQuery):
     user_id = callback.from_user.id
     data = callback.data
 
-    # UI भाषा चयन
     if data.startswith("ui:"):
         ui_lang = data.split(":", 1)[1]
         if user_id not in user_data:
@@ -273,13 +251,11 @@ async def callback_handler(client: Client, callback: CallbackQuery):
         )
         return
 
-    # बाकी सब काम के लिए UI भाषा चाहिए
     if user_id not in user_data or 'ui_lang' not in user_data[user_id]:
         await callback.message.edit_text("❌ Please /start again.")
         return
     ui_lang = user_data[user_id]['ui_lang']
 
-    # पेजिनेशन हैंडलिंग
     if data.startswith("src_page:"):
         page = int(data.split(":")[1])
         await callback.message.edit_text(
@@ -295,7 +271,6 @@ async def callback_handler(client: Client, callback: CallbackQuery):
         )
         return
 
-    # स्रोत भाषा चयन
     if data.startswith("src:"):
         lang_code = data.split(":", 1)[1]
         user_data[user_id]['source_lang'] = lang_code
@@ -306,7 +281,6 @@ async def callback_handler(client: Client, callback: CallbackQuery):
         )
         return
 
-    # लक्ष्य भाषा चयन
     if data.startswith("tgt:"):
         lang_code = data.split(":", 1)[1]
         user_data[user_id]['target_lang'] = lang_code
@@ -318,7 +292,6 @@ async def callback_handler(client: Client, callback: CallbackQuery):
                 DUB_LANGS[lang_code]
             )
         )
-        # प्रोसेसिंग शुरू करें
         asyncio.create_task(process_video(processing_msg, user_id))
 
 @bot.on_message(filters.video)
@@ -358,27 +331,23 @@ async def process_video(msg: Message, user_id: int):
         target_lang = data['target_lang']
         video_msg_id = data['video_msg_id']
 
-        # वीडियो मैसेज लाएँ
         video_msg = await msg.chat.get_messages(video_msg_id)
         if not video_msg or not video_msg.video:
             await msg.edit_text(get_text(ui_lang, "error_video_not_found"))
             return
 
-        # डाउनलोड
         await msg.edit_text(get_text(ui_lang, "step_download"))
         temp_dir = tempfile.mkdtemp(prefix="dub_")
         video_path = os.path.join(temp_dir, "input_video.mp4")
         await video_msg.download(file_name=video_path)
         logger.info(f"Video downloaded for user {user_id}")
 
-        # ऑडियो निकालें
         await msg.edit_text(get_text(ui_lang, "step_audio"))
         audio_path = os.path.join(temp_dir, "audio.wav")
-        video_clip = mp.VideoFileClip(video_path)
+        video_clip = VideoFileClip(video_path)
         video_clip.audio.write_audiofile(audio_path, logger=None, verbose=False)
         video_clip.close()
 
-        # Speech to Text
         await msg.edit_text(get_text(ui_lang, "step_stt"))
         recognizer = sr.Recognizer()
         with sr.AudioFile(audio_path) as source:
@@ -394,26 +363,23 @@ async def process_video(msg: Message, user_id: int):
             await msg.edit_text(get_text(ui_lang, "error_general").format(str(e)))
             return
 
-        # अनुवाद
         await msg.edit_text(get_text(ui_lang, "step_translate"))
         translated = translator.translate(text, dest=target_lang)
         translated_text = translated.text
         logger.info(f"Translated text: {translated_text[:100]}")
 
-        # TTS
         await msg.edit_text(get_text(ui_lang, "step_tts"))
         tts = gTTS(translated_text, lang=get_gtts_lang(target_lang), slow=False)
         tts_path = os.path.join(temp_dir, "tts.mp3")
         tts.save(tts_path)
 
-        # मर्ज
         await msg.edit_text(get_text(ui_lang, "step_merge"))
-        video_clip = mp.VideoFileClip(video_path)
-        new_audio = mp.AudioFileClip(tts_path)
+        video_clip = VideoFileClip(video_path)
+        new_audio = AudioFileClip(tts_path)
 
         if new_audio.duration < video_clip.duration:
             n = int(video_clip.duration / new_audio.duration) + 1
-            new_audio = mp.concatenate_audioclips([new_audio] * n)
+            new_audio = concatenate_audioclips([new_audio] * n)
         new_audio = new_audio.subclip(0, video_clip.duration)
 
         final_video = video_clip.set_audio(new_audio)
@@ -430,7 +396,6 @@ async def process_video(msg: Message, user_id: int):
         video_clip.close()
         new_audio.close()
 
-        # अपलोड
         await msg.edit_text(get_text(ui_lang, "step_upload"))
         caption = get_text(ui_lang, "success").format(
             DUB_LANGS[source_lang],
@@ -442,7 +407,7 @@ async def process_video(msg: Message, user_id: int):
             caption=caption,
             parse_mode=ParseMode.MARKDOWN
         )
-        await msg.delete()  # प्रोसेसिंग मैसेज हटाएँ
+        await msg.delete()
         logger.info(f"Processing complete for user {user_id}")
 
     except FloodWait as e:
@@ -458,17 +423,13 @@ async def process_video(msg: Message, user_id: int):
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
         if user_id in user_data:
-            # step को वापस video_wait पर सेट करें ताकि अगली वीडियो भेज सके
-            if user_id in user_data:
-                user_data[user_id]['step'] = 'video_wait'
+            user_data[user_id]['step'] = 'video_wait'
 
 # -------------------- MAIN --------------------
 async def main():
-    # Flask चलाएँ
     Thread(target=run_flask, daemon=True).start()
     logger.info("Flask server started.")
 
-    # बॉट शुरू करें
     await bot.start()
     logger.info(f"Bot started: @{bot.me.username}")
 
