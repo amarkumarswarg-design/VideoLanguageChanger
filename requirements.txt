@@ -5,8 +5,8 @@ TgCrypto>=1.2.5
 # Web server
 Flask>=2.2.0
 
-# Video processing
-moviepy>=1.0.3
+# Video processing - सही वर्शन: 1.0.3
+moviepy==1.0.3
 imageio-ffmpeg>=0.4.0
 
 # Translation & TTS
@@ -15,6 +15,3 @@ gTTS>=2.3.0
 
 # Speech recognition
 SpeechRecognition>=3.10.0
-
-# Optional but helpful
-pydub>=0.25.1
